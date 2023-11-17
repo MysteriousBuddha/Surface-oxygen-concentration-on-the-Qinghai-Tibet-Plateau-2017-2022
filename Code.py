@@ -11,13 +11,15 @@ from sklearn.linear_model import LinearRegression
 # Construct the oxygen concentration estimation model
 
 # Read data and select the data to be estimated
-df = pd.read_excel('Surface oxygen concentration on the Qinghai-Tibet Plateau (2018-2020).xlsx', parse_dates=['Time'])
-data = df[(df['Time'].dt.month>=6) & (df['Time'].dt.month<=8)]
+data = pd.read_excel('Surface oxygen concentration on the Qinghai-Tibet Plateau (2018-2020).xlsx', parse_dates=['Time'])
 
 # Normalized the factors
-nE = MinMaxScaler(feature_range=(0, 1)).fit_transform(data['Elevation (m)'].values.reshape(-1, 1))
-nT = MinMaxScaler(feature_range=(0, 1)).fit_transform(data['Temperature (°C)'].values.reshape(-1, 1))
-nL = MinMaxScaler(feature_range=(0, 1)).fit_transform(data['LAI'].values.reshape(-1, 1))
+E_MinMaxScaler = MinMaxScaler(feature_range=(0, 1))
+T_MinMaxScaler = MinMaxScaler(feature_range=(0, 1))
+L_MinMaxScaler = MinMaxScaler(feature_range=(0, 1))
+nE = E_MinMaxScaler.fit_transform(data['Elevation (m)'].values.reshape(-1, 1))
+nT = T_MinMaxScaler.fit_transform(data['Temperature (°C)'].values.reshape(-1, 1))
+nL = L_MinMaxScaler.fit_transform(data['LAI'].values.reshape(-1, 1))
 
 # Calculate the estimated temporary variable
 tmp = []
@@ -28,11 +30,11 @@ toc = pd.DataFrame(data=np.array([tmp, oc], dtype=float).T, columns=['Tmp', 'OC'
 
 # Construct the oxygen concentration estimation model
 result = []
-for m in range(3, 366):
+for m in range(3, len(data)-2):
     a = []
     b = []
     rmse = []
-    for t in range(50):
+    for t in range(50000):
         toc_train = toc.sample(m)
         toc_test = toc[~toc.index.isin(toc_train.index)]  # Test set
         x_train = toc_train['Tmp'].values
@@ -46,9 +48,17 @@ for m in range(3, 366):
         y_test = toc_test['OC'].values
         x_test = x_test.reshape(-1, 1)
         y_predict = f.predict(x_test)
+        y_mean = np.mean(y_test)
+        ssr = np.sum(np.power(y_predict - y_mean, 2))
+        sse = np.sum(np.power(y_test - y_predict, 2))
+        Fstats = ssr / (sse / (len(toc_test) - 2))
+        p_value = stats.f.sf(Fstats, 1, len(toc_test) - 2)
         rmse.append(np.sqrt(mean_squared_error(y_test, y_predict)))
-    result.append([i, np.mean(a), np.mean(b), np.mean(rmse), np.std(rmse)])
-dr = pd.DataFrame(columns=['num', 'a', 'b', 'rmse_mean', 'rmse_std'], data=result)
+        r2.append(f.score(x_test, y_test))
+        p.append(p_value)
+    result.append([m, np.mean(a), np.mean(b), np.mean(rmse), np.std(rmse), np.mean(r2), np.mean(p)])
+dr = pd.DataFrame(columns=['num', 'a', 'b', 'rmse_mean', 'rmse_std', 'r2_mean', 'p_mean'], data=result)
+dr.to_excel('estimation model.xlsx')
 
 # Select the most robust model
 ma = dr.loc[dr.idxmin()['rmse_std']]['a']
@@ -96,17 +106,11 @@ lai = np.where(lai == lai[0][0], np.nan, lai)
 ne = np.empty(shape=dem.shape)
 nt = np.empty(shape=tem.shape)
 nl = np.empty(shape=lai.shape)
-dem_min = np.nanmin(dem)
-dem_max = np.nanmax(dem)
-tem_min = np.nanmin(tem)
-tem_max = np.nanmax(tem)
-lai_min = np.nanmin(lai)
-lai_max = np.nanmax(lai)
-for i in range(len(ne)):
+for i in tqdm(range(len(ne))):
     for j in range(len(ne[0])):
-        ne[i][j] = (dem[i][j] - dem_min) / (dem_max - dem_min)
-        nt[i][j] = (tem[i][j] - tem_min) / (tem_max - tem_min)
-        nl[i][j] = (lai[i][j] - lai_min) / (lai_max - lai_min)
+        ne[i][j] = E_MinMaxScaler.transform(dem[i][j].reshape(-1, 1))
+        nt[i][j] = T_MinMaxScaler.transform(tem[i][j].reshape(-1, 1))
+        nl[i][j] = L_MinMaxScaler.transform(lai[i][j].reshape(-1, 1))
 
 # Estimate the oxygen concentration distribution data
 ocs = np.empty(shape=dem.shape)
